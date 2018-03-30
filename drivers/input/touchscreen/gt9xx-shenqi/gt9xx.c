@@ -54,7 +54,7 @@
 #if GTP_ICS_SLOT_REPORT
     #include <linux/input/mt.h>
 #endif
-
+#include <linux/qpnp/vibrator.h>
 
 #define GOODIX_DEV_NAME "Goodix-CTP"
 static struct workqueue_struct *goodix_wq;
@@ -70,14 +70,19 @@ struct i2c_client * i2c_connect_client = NULL;
 #define RESET_DELAY_T4 6
 #define GTP_I2C_ADDRESS_HIGH	0x14
 #define GTP_I2C_ADDRESS_LOW	0x5D
+
+#define VIBRATE_STRENGTH 27
+
 u8 config[GTP_CONFIG_MAX_LENGTH + GTP_ADDR_LENGTH]
                 = {GTP_REG_CONFIG_DATA >> 8, GTP_REG_CONFIG_DATA & 0xff};
 
 #if GTP_HAVE_TOUCH_KEY
     static int gtp_key_enable = 1;
+    static int gtp_key_reverse = 1;
     static const u16 touch_key_array[] = GTP_KEY_TAB;
     #define GTP_MAX_KEY_NUM  (sizeof(touch_key_array)/sizeof(touch_key_array[0]))
-    
+    void gtp_report_key(struct goodix_ts_data *ts, int i, int status);
+
 #if GTP_DEBUG_ON
     static const int  key_codes[] = {KEY_HOMEPAGE, KEY_BACK, KEY_MENU, KEY_SEARCH};
     //static const char *key_names[] = {"Key_Home", "Key_Back", "Key_Menu", "Key_Search"};
@@ -598,6 +603,18 @@ static void gtp_pen_up(s32 id)
 }
 #endif
 
+void gtp_report_key(struct goodix_ts_data *ts, int i, int status) {
+    int report_key;
+    if (i) {
+        report_key = gtp_key_reverse ? KEY_MENU : KEY_BACK;
+    } else {
+        report_key = gtp_key_reverse ? KEY_BACK : KEY_MENU;
+    }
+    input_report_key(ts->input_dev, report_key, status);
+    GTP_DEBUG("KEY:%d,status:%d", report_key, status);
+    printk(KERN_ERR "KEY:%d,status:%d\n", report_key, status);
+}
+
 /*******************************************************
 Function:
     Goodix touchscreen work function
@@ -627,9 +644,6 @@ static void goodix_ts_work_func(struct work_struct *work)
     s32 i  = 0;
     s32 ret = -1;
     struct goodix_ts_data *ts = NULL;
-#if GTP_HAVE_TOUCH_KEY
-	s32 key_status = 0;
-#endif
 
 #if GTP_COMPATIBLE_MODE
     u8 rqst_buf[3] = {0x80, 0x43};  // for GT9XXF
@@ -752,10 +766,11 @@ static void goodix_ts_work_func(struct work_struct *work)
 				}else
 				{
                 GTP_INFO("Double click to light up the screen!");
-                input_report_key(ts->input_dev, KEY_POWER, 1);
+                input_report_key(ts->input_dev, KEY_WAKEUP, 1);
                 input_sync(ts->input_dev);
-                input_report_key(ts->input_dev, KEY_POWER, 0);
+                input_report_key(ts->input_dev, KEY_WAKEUP, 0);
                 input_sync(ts->input_dev);
+		vibrate(VIBRATE_STRENGTH);
 				}
                 // clear 0x814B
                 doze_buf[2] = 0x00;
@@ -941,33 +956,14 @@ static void goodix_ts_work_func(struct work_struct *work)
     #endif
     
     #if GTP_HAVE_TOUCH_KEY
-        if (!pre_touch)
-        {
-	    if(gtp_key_enable){
-                for (i = 0; i < GTP_MAX_KEY_NUM; i++)
-                {
-			key_status =((key_value &(0x01<<i))!=0);
-			if((pre_key&(0x01<<i))!=(key_value&(0x01<<i)))
-			{
-                		input_report_key(ts->input_dev, touch_key_array[i], key_value & (0x01<<i));
-				GTP_DEBUG("KEY:%d,status:%d",touch_key_array[i],key_status);
-				printk(KERN_ERR "KEY:%d,status:%d\n",touch_key_array[i],key_status);
-			}
-/*
-#if GTP_DEBUG_ON
-                	for (ret = 0; ret < 4; ++ret)
-                	{
-                    		if (key_codes[ret] == touch_key_array[i])
-                    		{
-                        		GTP_DEBUG("Key: %s %s", key_names[ret], (key_value & (0x01 << i)) ? "Down" : "Up");
-                        		break;
-                    		}
-                	}
-#endif
-                	input_report_key(ts->input_dev, touch_key_array[i], key_value & (0x01<<i));   */
+        if (!pre_touch && gtp_key_enable) {
+                for (i = 0; i < GTP_MAX_KEY_NUM; i++) {
+                    if(!(pre_key&(0x01<<i)) && (key_value&(0x01<<i))) {
+                        gtp_report_key(ts,i,1);
+                    } else if ((pre_key&(0x01<<i)) && !(key_value&(0x01<<i))) {
+                        gtp_report_key(ts,i,0);
+                    }
                 }
-	    }
-         //   touch_num = 0;  // shield fingers
         }
     #endif
     }
@@ -2289,7 +2285,7 @@ static s8 gtp_request_input_dev(struct goodix_ts_data *ts)
 	input_set_capability(ts->input_dev, EV_KEY, KEY_GESTURE_LR);
 	input_set_capability(ts->input_dev, EV_KEY, KEY_GESTURE_RL);
 	input_set_capability(ts->input_dev, EV_KEY, KEY_GESTURE_DT);
-    input_set_capability(ts->input_dev, EV_KEY, KEY_POWER);
+    input_set_capability(ts->input_dev, EV_KEY, KEY_WAKEUP);
 #endif 
 
 #if GTP_CHANGE_X2Y
@@ -3085,6 +3081,28 @@ static ssize_t gtp_key_enable_store(struct device *dev,
 
 	return count;
 }
+
+static ssize_t gtp_key_reverse_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n",!!gtp_key_reverse);
+}
+
+static ssize_t gtp_key_reverse_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long val;
+	int ret;
+
+	ret = sstrtoul(buf, 10, &val);
+	if(ret)
+		return ret;
+
+	gtp_key_reverse = !!val;
+
+	return count;
+}
+
 #if GTP_GLOVE_MODE
 #if GTP_GLOVE_SYS
 static ssize_t gtp_glove_wakeup_show(struct device *dev,
@@ -3173,6 +3191,9 @@ static struct device_attribute attrs[] = {
 	__ATTR(key_enable, 0664,
 			gtp_key_enable_show,
 			gtp_key_enable_store),
+	__ATTR(key_reverse, 0664,
+			gtp_key_reverse_show,
+			gtp_key_reverse_store),
 #if GTP_GESTURE_WAKEUP
 	__ATTR(gesture_on, 0664,
 			gtp_gesture_wakeup_show,

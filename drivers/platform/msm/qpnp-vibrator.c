@@ -410,6 +410,8 @@ static int __devinit qpnp_vibrator_probe(struct spmi_device *spmi)
 	if (rc < 0)
 		goto error_create_default;
 
+	device_create_file(vib->timed_dev.dev, &dev_attr_vtg_level);
+
 	vib_dev = vib;
 
 	return 0;
@@ -423,6 +425,11 @@ error_create_min:
 error_create_level:
 	timed_output_dev_unregister(&vib->timed_dev);
 	return rc;
+}
+
+void vibrate(int strength)
+{
+        qpnp_vib_enable(&vib_dev->timed_dev, strength);
 }
 
 static int  __devexit qpnp_vibrator_remove(struct spmi_device *spmi)
@@ -469,3 +476,4 @@ module_exit(qpnp_vibrator_exit);
 
 MODULE_DESCRIPTION("qpnp vibrator driver");
 MODULE_LICENSE("GPL v2");
+

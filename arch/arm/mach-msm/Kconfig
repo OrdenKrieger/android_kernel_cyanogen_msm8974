@@ -2428,6 +2428,19 @@ config MSM_WATCHDOG_V2
 		deadlocks. It does not run during the bootup process, so it will
 		not catch any early lockups.
 
+config FORCE_FAST_CHARGE
+        bool "Force AC charge mode at will"
+        default y
+        help
+            A simple sysfs interface to force adapters that are detected as
+            USB to charge as AC.
+
+config ALUCARD_HOTPLUG
+	bool "Enable alucard-hotplug cpu hotplug driver"
+	default n
+	help
+Generic Alucard-hotplug cpu hotplug driver for ARM SOCs
+
 config MSM_MEMORY_DUMP
 	bool "MSM Memory Dump Support"
 	help
